@@ -7,6 +7,8 @@ extern crate accelerate_src;
 mod bert;
 mod roberta; 
 
+pub use roberta::{RobertaModel, RobertaConfig};
+
 pub use bert::{BertModel, Config, PositionEmbeddingType};
 use candle_core::{Result, Tensor};
 // pub use jina::JinaBertModel;

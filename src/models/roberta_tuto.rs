@@ -1,15 +1,117 @@
-use std::collections::HashMap;
-
+use candle_nn::ops::softmax;
+// use anyhow::Ok;
+use candle_nn::{Embedding, VarBuilder, Module, Linear, Dropout, Activation};
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, VarBuilder};
-use candle_nn::{LayerNorm, Linear, Dropout, Activation, embedding, linear, layer_norm};
-
+// use candle_core::{DType, Device, Tensor};
 use serde::Deserialize;
 
-pub const FLOATING_DTYPE: DType = DType::F32;
-pub const LONG_DTYPE: DType = DType::I64;
+// fn embedding(vocab_size: usize, hidden_size: usize, vb:VarBuilder) -> Result<Embedding> {
+//     let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
+//     Ok(Embedding::new(embeddings, hidden_size))
+// }
 
-pub const TRAIN: bool = false;
+// fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
+//     let weight = vb.get((size2, size1), "weight")?;
+//     let bias = vb.get(size2, "bias")?;
+
+//     Ok(Linear::new(weight, Some(bias)))
+// }
+
+use candle_nn::{embedding, linear};
+
+// pub struct LayerNorm {
+//     weight: Tensor, // weight vector of the LayerNorm
+//     bias: Tensor, // bias vector of the LayerNorm
+//     eps: f64, // Eps value 
+// }
+
+// impl LayerNorm {
+//     pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
+//         Self { weight, bias, eps }
+//     }
+
+//     pub fn forward(&self, x: Tensor) -> Result<Tensor> {
+//         let x_dtype = x.dtype();
+//         let internal_dtype = match x_dtype {
+//             DType::F16 | DType::BF16 => DType::F32,
+//             d => d,
+//         };
+//         // get dimension of the hidden layer
+//         let (_bsize, _seq_len, hidden_size) = x.dims3()?;
+//         // cast the input to the expected DType for calculation
+//         let x = x.to_dtype(internal_dtype)?;
+
+//         // compute mean 
+//         let mean_x = (x.sum_keepdim(2)? / hidden_size as f64)?;
+//         // subtract mean from the input x
+//         let x = x.broadcast_sub(&mean_x)?;
+//         // compute mean squared norm 
+//         let norm_x = (x.sqr()?.sum_keepdim(2)? / hidden_size as f64)?;
+//         // get normalized input
+//         let normed_x = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+//         // cast to the input DType, miltily by weight and add bias
+//         let x = normed_x
+//             .to_dtype(x_dtype)?
+//             .broadcast_mul(&self.weight)?
+//             .broadcast_add(&self.bias)?;
+
+//         Ok(x)
+//     }
+// }
+
+use candle_nn::{LayerNorm,layer_norm};
+
+use crate::layers::HiddenAct;
+
+// let w_gen = Tensor::new(&[[3f32, 1.]], &Device::Cpu)?;
+// let b_gen = Tensor::new(-2f32, &Device::Cpu)?;
+
+// // initialize a layer norm layer
+// let layer_norm = LayerNorm::new(w_gen, b_gen, 1f64);
+
+// let data: [u32; 3] = [1u32, 2, 3];
+// let input_tensor = Tensor::new(&data, &Device::Cpu)?;
+// let normalized_tensor = layer_norm.forward(&input_tensor)?;
+
+// struct Dropout {
+//     #[allow(dead_code)]
+//     pr: f64,
+// }
+
+// impl Dropout {
+//     fn new(pr: f64) -> Self {
+//         Self { pr }
+//     }
+
+//     fn forward(&self, x: Tensor) -> Result<Tensor> {
+//         // Used only in training -> we don't care during inference
+//         Ok(x.clone()) 
+//     }
+// }
+
+// let dropout = Dropout::new(0.1);
+
+// let data: [u32; 3] = [1u32, 2, 3];
+// let input_tensor = Tensor::new(&data, &Device::Cpu)?;
+// let dropout_tensor = dropout.forward(&input_tensor)?;
+// struct Activation {}
+
+// impl Activation {
+//     fn new() -> Self {
+//         Self {}
+//     }
+
+//     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+//         Ok(x.gelu()?)
+//     }
+// }
+
+// let activation = Activation::new();
+
+// let data: [u32; 3] = [1u32, 2, 3];
+// let input_tensor = Tensor::new(&data, &Device::Cpu)?;
+// let activation_tensor = activation.forward(&input_tensor)?;
+
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -18,15 +120,15 @@ enum PositionEmbeddingType {
     #[default]
     Absolute,
 }
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+
 pub struct RobertaConfig {
     vocab_size: usize,
     hidden_size: usize,
     num_hidden_layers: usize,
     num_attention_heads: usize,
     intermediate_size: usize,
-    hidden_act: Activation,
-    hidden_dropout_prob: f64,
+    hidden_act: String,
+    hidden_dropout_prob: f32, // TODO type mismatch
     max_position_embeddings: usize,
     type_vocab_size: usize,
     initializer_range: f64,
@@ -34,16 +136,10 @@ pub struct RobertaConfig {
     pad_token_id: usize,
     bos_token_id: usize,
     eos_token_id: usize,
-    #[serde(default)]
     position_embedding_type: PositionEmbeddingType,
-    #[serde(default)]
     use_cache: bool,
     classifier_dropout: Option<f64>,
     model_type: Option<String>,
-    problem_type: Option<String>,
-    _num_labels: Option<usize>,
-    id2label: Option<HashMap<String, String>>,
-    label2id: Option<HashMap<String, usize>>
 }
 
 impl Default for RobertaConfig {
@@ -54,7 +150,7 @@ impl Default for RobertaConfig {
             num_hidden_layers: 12,
             num_attention_heads: 12,
             intermediate_size: 3072,
-            hidden_act: Activation::Gelu,
+            hidden_act: "gelu".to_string(),
             hidden_dropout_prob: 0.1,
             max_position_embeddings: 512,
             type_vocab_size: 2,
@@ -67,10 +163,6 @@ impl Default for RobertaConfig {
             use_cache: true,
             classifier_dropout: None,
             model_type: Some("roberta".to_string()),
-            problem_type: None,
-            _num_labels: Some(3),
-            id2label: None,
-            label2id: None
         }
     }
 }
@@ -108,20 +200,18 @@ fn cumsum_2d(mask: &Tensor, dim: u8, device: &Device) -> Result<Tensor> {
     Ok(result)
 }
 
-pub fn create_position_ids_from_input_ids(
-    input_ids: &Tensor,
-    padding_idx: u32,
-    past_key_values_length: u8,
-) -> Result<Tensor> {
+pub fn create_position_ids_from_input_ids(input_ids: &Tensor, padding_idx:u32, past_key_values_length: u8) -> Result<Tensor> {
+    // mask = input_ids.ne(padding_idx).int()
     let mask = input_ids.ne(padding_idx)?;
+    // incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
     let incremental_indices = cumsum_2d(&mask, 0, input_ids.device())?;
 
+    // incremental_indices.long() + padding_idx
     let incremental_indices = incremental_indices
         .broadcast_add(&Tensor::new(&[past_key_values_length], input_ids.device())?)?;
 
     Ok(incremental_indices)
 }
-
 
 pub struct RobertaEmbeddings {
     word_embeddings: Embedding,
@@ -134,26 +224,33 @@ pub struct RobertaEmbeddings {
 
 impl RobertaEmbeddings {
     pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        // nn.Embedding(config.vocab_size, config.hidden_size)
         let word_embeddings = embedding(
-            config.vocab_size,
-            config.hidden_size,
+            config.vocab_size, 
+            config.hidden_size, 
             vb.pp("word_embeddings"),
         )?;
+        // nn.Embedding(config.max_position_embeddings, config.hidden_size)
         let position_embeddings = embedding(
             config.max_position_embeddings,
             config.hidden_size,
             vb.pp("position_embeddings"),
         )?;
+        // nn.Embedding(config.type_vocab_size, config.hidden_size)
         let token_type_embeddings = embedding(
-            config.type_vocab_size,
-            config.hidden_size,
+            config.type_vocab_size, 
+            config.hidden_size, 
             vb.pp("token_type_embeddings"),
         )?;
+        // nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         let layer_norm = layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             vb.pp("LayerNorm"),
         )?;
+        // nn.Dropout(config.hidden_dropout_prob)
+        let dropout = Dropout::new(config.hidden_dropout_prob as f32);
+
         let padding_idx = config.pad_token_id as u32;
 
         Ok(Self {
@@ -161,72 +258,77 @@ impl RobertaEmbeddings {
             position_embeddings: Some(position_embeddings),
             token_type_embeddings,
             layer_norm,
-            dropout: Dropout::new(config.hidden_dropout_prob as f32),
+            dropout,
             padding_idx,
         })
     }
 
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        token_type_ids: &Tensor,
-        position_ids: Option<&Tensor>,
-        inputs_embeds: Option<&Tensor>,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor, position_ids: Option<&Tensor>, inputs_embeds: Option<&Tensor>) -> Result<Tensor> {
         let position_ids = match position_ids {
             Some(ids) => ids.to_owned(),
             None => {
-                if Option::is_some(&inputs_embeds) {
-                    let position_ids =
-                        self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?;
+                if Option::is_some(&inputs_embeds){
+                    // self.create_position_ids_from_inputs_embeds(inputs_embeds)
+                    let position_ids = self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?;
                     position_ids
                 } else {
-                    let position_ids =
-                        create_position_ids_from_input_ids(input_ids, self.padding_idx, 1)?;
+                    // create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
+                    let position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, 1)?;
                     position_ids
                 }
             }
         };
 
-        let inputs_embeds: Tensor = match inputs_embeds {
+        let inputs_embeds : Tensor = match inputs_embeds {
             Some(embeds) => embeds.to_owned(),
             None => {
+                // self.word_embeddings(input_ids)
                 let embeds = self.word_embeddings.forward(input_ids)?;
                 embeds
             }
         };
 
+        // self.token_type_embeddings(token_type_ids)
         let token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)?;
+        // input_embeds + token_type_embeddings
         let mut embeddings = (inputs_embeds + token_type_embeddings)?;
 
         if let Some(position_embeddings) = &self.position_embeddings {
+            // embeddings + self.position_embeddings(position_ids)
             embeddings = embeddings.broadcast_add(&position_embeddings.forward(&position_ids)?)?
         }
 
+        //self.LayerNorm(embeddings)
         let embeddings = self.layer_norm.forward(&embeddings)?;
-        let embeddings = self.dropout.forward(&embeddings, TRAIN)?;
+        //self.dropout(embeddings)
+        let embeddings = self.dropout.forward(&embeddings, false)?;
 
         Ok(embeddings)
+
+        
     }
-
     pub fn create_position_ids_from_input_embeds(&self, input_embeds: &Tensor) -> Result<Tensor> {
+        // input_shape = inputs_embeds.size()[:-1]
         let input_shape = input_embeds.dims3()?;
+        // sequence_length = input_shape[1]
         let seq_length = input_shape.1;
-
-        println!("seq_length: {:?}", seq_length);
+        // position_ids = torch.arange(
+        //     self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
+        // )
         let mut position_ids = Tensor::arange(
-            self.padding_idx + 1,
-            seq_length as u32 + self.padding_idx + 1,
+            self.padding_idx +1, 
+            seq_length as u32 + self.padding_idx + 1, 
             &Device::Cpu,
         )?;
-
-        println!("position_ids: {:?}", position_ids);
-
+        // return position_ids.unsqueeze(0).expand(input_shape)
         position_ids = position_ids
             .unsqueeze(0)?
             .expand((input_shape.0, input_shape.1))?;
+
         Ok(position_ids)
     }
+
+
 }
 
 struct RobertaSelfAttention {
@@ -240,13 +342,30 @@ struct RobertaSelfAttention {
 
 impl RobertaSelfAttention {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        // self.num_attention_heads = config.num_attention_heads
+        // self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         let attention_head_size = config.hidden_size / config.num_attention_heads;
+        // self.all_head_size = self.num_attention_heads * self.attention_head_size
         let all_head_size = config.num_attention_heads * attention_head_size;
-        let dropout = Dropout::new(config.hidden_dropout_prob as f32);
+
         let hidden_size = config.hidden_size;
+        // self.query = nn.Linear(config.hidden_size, self.all_head_size)
         let query = linear(hidden_size, all_head_size, vb.pp("query"))?;
-        let value = linear(hidden_size, all_head_size, vb.pp("value"))?;
+        // self.key = nn.Linear(config.hidden_size, self.all_head_size)
         let key = linear(hidden_size, all_head_size, vb.pp("key"))?;
+        // self.value = nn.Linear(config.hidden_size, self.all_head_size)
+        let value = linear(hidden_size, all_head_size, vb.pp("value"))?;
+
+        // self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
+        let dropout = Dropout::new(config.hidden_dropout_prob);
+        // self.position_embedding_type = position_embedding_type or getattr(
+        //     config, "position_embedding_type", "absolute"
+        // )
+        // if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
+        //     self.max_position_embeddings = config.max_position_embeddings
+        //     self.distance_embedding = nn.Embedding(2 * config.max_position_embeddings - 1, self.attention_head_size)
+
+        // self.is_decoder = config.is_decode
         Ok(Self {
             query,
             key,
@@ -256,13 +375,16 @@ impl RobertaSelfAttention {
             attention_head_size,
         })
     }
-
+    
     fn transpose_for_scores(&self, xs: &Tensor) -> Result<Tensor> {
+        // new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         let mut new_x_shape = xs.dims().to_vec();
         new_x_shape.pop();
         new_x_shape.push(self.num_attention_heads);
         new_x_shape.push(self.attention_head_size);
+        // x = x.view(new_x_shape)
         let xs = xs.reshape(new_x_shape.as_slice())?.transpose(1, 2)?;
+        // return x.permute(0, 2, 1, 3)
         xs.contiguous()
     }
 
@@ -274,16 +396,17 @@ impl RobertaSelfAttention {
         let query_layer = self.transpose_for_scores(&query_layer)?;
         let key_layer = self.transpose_for_scores(&key_layer)?;
         let value_layer = self.transpose_for_scores(&value_layer)?;
-
-        let attention_scores = query_layer.matmul(&key_layer.t()?)?;
-        let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
-        let attention_probs =
-            { candle_nn::ops::softmax(&attention_scores, candle_core::D::Minus1)? };
-        let attention_probs = self.dropout.forward(&attention_probs, TRAIN)?;
+        
+        let atttention_scores = query_layer.matmul(&key_layer.t()?)?;
+        let attention_scores = (atttention_scores / (self.attention_head_size as f64).sqrt())?;
+        let attention_probs = {candle_nn::ops::softmax(&attention_scores, candle_core::D::Minus1)?};
+        let attention_probs = self.dropout.forward(&attention_probs, false)?;
 
         let context_layer = attention_probs.matmul(&value_layer)?;
         let context_layer = context_layer.transpose(1, 2)?.contiguous()?;
+
         let context_layer = context_layer.flatten_from(candle_core::D::Minus2)?;
+
         Ok(context_layer)
     }
 }
@@ -296,13 +419,20 @@ struct RobertaSelfOutput {
 
 impl RobertaSelfOutput {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
-        let layer_norm = layer_norm(
-            config.hidden_size,
-            config.layer_norm_eps,
-            vb.pp("LayerNorm"),
+        let dense = linear(
+            config.hidden_size, 
+            config.hidden_size, 
+            vb.pp("dense")
         )?;
-        let dropout = Dropout::new(config.hidden_dropout_prob as f32);
+
+        let layer_norm = layer_norm(
+            config.hidden_size, 
+            config.layer_norm_eps, 
+            vb.pp("LayerNorm")
+        )?;
+
+        let dropout = Dropout::new(config.hidden_dropout_prob);
+
         Ok(Self {
             dense,
             layer_norm,
@@ -312,7 +442,7 @@ impl RobertaSelfOutput {
 
     fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let hidden_states = self.dense.forward(hidden_states)?;
-        let hidden_states = self.dropout.forward(&hidden_states, TRAIN)?;
+        let hidden_states = self.dropout.forward(&hidden_states, false)?;
         self.layer_norm.forward(&(hidden_states + input_tensor)?)
     }
 }
@@ -326,40 +456,40 @@ impl RobertaAttention {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
         let self_attention = RobertaSelfAttention::load(vb.pp("self"), config)?;
         let self_output = RobertaSelfOutput::load(vb.pp("output"), config)?;
+
         Ok(Self {
             self_attention,
             self_output,
-        })
+        })       
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let self_outputs = self.self_attention.forward(hidden_states)?;
         let attention_output = self.self_output.forward(&self_outputs, hidden_states)?;
+        
         Ok(attention_output)
     }
+
 }
 
 struct HiddenActLayer {
-    act: Activation,
-    // TODO add tracing to whole class
-    // span: tracing::Span,
+    act: HiddenAct,
+    span: tracing::Span,
 }
 
 impl HiddenActLayer {
-    fn new(act: Activation) -> Self {
-        // TODO add tracing
-        // let span = tracing::span!(tracing::Level::TRACE, "hidden-act");
-        Self { act }
+    fn new(act: HiddenAct) -> Self {
+        let span = tracing::span!(tracing::Level::TRACE, "hidden-act");
+        Self { act, span }
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // let _enter = self.span.enter();
-        // match self.act {
-        //     // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
-        //     Activation::Gelu => xs.gelu_erf(),
-        //     Activation::Relu => xs.relu(),
-        // }
-        self.act.forward(xs)
+        let _enter = self.span.enter();
+        match self.act {
+            // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
+            HiddenAct::Gelu => xs.gelu_erf(),
+            HiddenAct::Relu => xs.relu(),
+        }
     }
 }
 struct RobertaIntermediate {
@@ -369,16 +499,22 @@ struct RobertaIntermediate {
 
 impl RobertaIntermediate {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let dense = linear(config.hidden_size, config.intermediate_size, vb.pp("dense"))?;
+        let dense = linear(
+            config.hidden_size, 
+            config.intermediate_size, 
+            vb.pp("dense")
+        )?;
+
         Ok(Self {
             dense,
-            intermediate_act: HiddenActLayer::new(config.hidden_act),
+            intermediate_act: HiddenActLayer::new(HiddenAct::Gelu),
         })
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let hidden_states = self.dense.forward(hidden_states)?;
+        let hidden_states = self.dense.forward(&hidden_states)?;
         let ys = self.intermediate_act.forward(&hidden_states)?;
+
         Ok(ys)
     }
 }
@@ -391,13 +527,20 @@ struct RobertaOutput {
 
 impl RobertaOutput {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let dense = linear(config.intermediate_size, config.hidden_size, vb.pp("dense"))?;
-        let layer_norm = layer_norm(
-            config.hidden_size,
-            config.layer_norm_eps,
-            vb.pp("LayerNorm"),
+        let dense = linear(
+            config.intermediate_size, 
+            config.hidden_size, 
+            vb.pp("dense")
         )?;
-        let dropout = Dropout::new(config.hidden_dropout_prob as f32);
+
+        let layer_norm = layer_norm(
+            config.hidden_size, 
+            config.layer_norm_eps,
+            vb.pp("LayerNorm")
+        )?;
+
+        let dropout = Dropout::new(config.hidden_dropout_prob);
+
         Ok(Self {
             dense,
             layer_norm,
@@ -407,7 +550,8 @@ impl RobertaOutput {
 
     fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let hidden_states = self.dense.forward(hidden_states)?;
-        let hidden_states = self.dropout.forward(&hidden_states, TRAIN)?;
+        let hidden_states = self.dropout.forward(&hidden_states, false)?;
+
         self.layer_norm.forward(&(hidden_states + input_tensor)?)
     }
 }
@@ -423,6 +567,7 @@ impl RobertaLayer {
         let attention = RobertaAttention::load(vb.pp("attention"), config)?;
         let intermediate = RobertaIntermediate::load(vb.pp("intermediate"), config)?;
         let output = RobertaOutput::load(vb.pp("output"), config)?;
+
         Ok(Self {
             attention,
             intermediate,
@@ -431,18 +576,16 @@ impl RobertaLayer {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let attention_output = self.attention.forward(hidden_states)?;
-
+        let attention_output = self.attention.forward(&hidden_states)?;
         let intermediate_output = self.intermediate.forward(&attention_output)?;
-        let layer_output = self
-            .output
-            .forward(&intermediate_output, &attention_output)?;
+        let layer_output = self.output.forward(&intermediate_output, &attention_output)?;
+
         Ok(layer_output)
     }
 }
 
 struct RobertaEncoder {
-    layers: Vec<RobertaLayer>,
+    layers: Vec<RobertaLayer>
 }
 
 impl RobertaEncoder {
@@ -450,18 +593,22 @@ impl RobertaEncoder {
         let layers = (0..config.num_hidden_layers)
             .map(|index| RobertaLayer::load(vb.pp(&format!("layer.{index}")), config))
             .collect::<Result<Vec<_>>>()?;
-        Ok(RobertaEncoder { layers })
+
+        Ok(Self { layers })
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let mut hidden_states = hidden_states.clone();
+
         for layer in self.layers.iter() {
             hidden_states = layer.forward(&hidden_states)?
         }
+        
         Ok(hidden_states)
     }
 }
 
+// And finally, the model:
 
 pub struct RobertaModel {
     embeddings: RobertaEmbeddings,
@@ -491,6 +638,7 @@ impl RobertaModel {
                 }
             }
         };
+
         Ok(Self {
             embeddings,
             encoder,
@@ -498,11 +646,16 @@ impl RobertaModel {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
-        let embedding_output = self
-            .embeddings
-            .forward(input_ids, token_type_ids, None, None)?;
+    fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
+        let embedding_output = self.embeddings.forward(
+            input_ids, 
+            token_type_ids, 
+            None, 
+            None
+        )?;
+
         let sequence_output = self.encoder.forward(&embedding_output)?;
+
         Ok(sequence_output)
     }
 }
