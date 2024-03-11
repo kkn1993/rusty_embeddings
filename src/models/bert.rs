@@ -479,6 +479,9 @@ impl BertModel {
     }
 
     pub fn forward(&self, batch: Batch) -> Result<Tensor> {
+        let start_enc = std::time::Instant::now();
+    
+    
         let _enter = self.span.enter();
 
         let batch_size = batch.cumulative_seq_lengths.len() - 1;
@@ -614,7 +617,7 @@ impl BertModel {
                 (outputs.sum(1)?.broadcast_div(&input_lengths))?
             }
         };
-
+        println!("Only encoding: {:?}", start_enc.elapsed());
         Ok(results)
     }
 }

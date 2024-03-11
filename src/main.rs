@@ -246,9 +246,9 @@ pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
     Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
 }
 
-fn rub_batch_tei() -> Result<()> {
+fn main_tei() -> Result<()> {
 
-    let start = std::time::Instant::now();
+    // let start = std::time::Instant::now();
 
     let device = &Device::Cpu;
     let model_id = "intfloat/multilingual-e5-base".to_string().to_owned();
@@ -333,13 +333,15 @@ fn rub_batch_tei() -> Result<()> {
     };
 
     println!("constructed batch from input");
+    
     let ys = model.forward(batch)?;
+    
 
     let embeddings =  normalize_l2(&ys)?;
     println!("pooled embeddings {embeddings}");
     // dbg!(embeddings);
 
-    println!("Took {:?}", start.elapsed()); //to_vecX()
+    // println!("Took {:?}", start.elapsed()); //to_vecX()
 
     Ok(())
 }
